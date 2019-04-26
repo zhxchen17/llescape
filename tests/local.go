@@ -1,11 +1,21 @@
 package main;
 
 type Point struct {
-  X int
-  Y int
+	X int
+	Y int
+}
+
+type Pair struct {
+	P *Point
+	Z int
+}
+func foo() int {
+	a := &Point{1, 2}
+	b := Pair{a, 0}
+	return b.Z
 }
 
 func main() {
-  a := &Point{1, 2}
-  println(a.X)
+	a := foo()
+	println(a)
 }
