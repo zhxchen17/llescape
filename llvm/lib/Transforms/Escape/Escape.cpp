@@ -3,6 +3,7 @@
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
 #include "llvm/IR/Value.h"
+#include "llvm/IR/Type.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/raw_ostream.h"
@@ -28,6 +29,7 @@ namespace {
 using NodeId = string;
 using InstId = string;
 static const string GO_HEAP_CALL = "__go_new";
+static const string GO_LIB_PREFIX = "__go_";
 NodeId getId(Instruction *inst) {
   uintptr_t id = reinterpret_cast<uintptr_t>(inst);
   stringstream stream;
@@ -71,6 +73,12 @@ struct Node {
            cmp(fields, other.fields);
   }
   void print() {
+    if (!(isa<CallInst>(inst) ||
+          isa<StoreInst>(inst) ||
+          isa<AllocaInst>(inst)
+          )) {
+      return;
+    }
     errs() << id << ": ";
     if (isMem) {
       errs() << "fields ";
@@ -103,19 +111,36 @@ struct Node {
     Node node;
     node.isMem = false;
     node.id = inst->getName();
+    node.inst = dyn_cast<Instruction>(inst);
     return node;
   }
 };
 struct ConnectionGraph {
   map<NodeId, Node> nodes;
   Node *getMemNode(Instruction *inst) {
+    Type *allocType = nullptr;
     if (auto *call = dyn_cast<CallInst>(inst)) {
       auto func = call->getCalledFunction();
       if (func && func->getName() == GO_HEAP_CALL) {
-        Node node = Node::makeMemNode(inst);
-        auto const &r = nodes.emplace(node.id, node);
-        return &r.first->second;
+        allocType = func->getReturnType();
+        int cnt = 0;
+        for (auto u : call->users()) {
+          if (cnt) {
+            errs() << "Allocated heap is used more than once!\n";
+            assert(false);
+          }
+          allocType = u->getType();
+          cnt += 1;
+        }
       }
+    } else if (auto *alloca = dyn_cast<AllocaInst>(inst)) {
+      allocType = alloca->getAllocatedType();
+    }
+    if (allocType) {
+      // TODO recursively generate MemNode
+      Node node = Node::makeMemNode(inst);
+      auto const &r = nodes.emplace(node.id, node);
+      return &r.first->second;
     }
     return nullptr;
   }
@@ -151,6 +176,10 @@ struct Escape : public FunctionPass {
         Node *root = next.getRefNode(inst);
         root->directs.emplace(obj->id);
       }
+    } else if (auto alloca = dyn_cast<AllocaInst>(inst)) {
+      Node *obj = next.getMemNode(inst);
+      Node *root = next.getRefNode(inst);
+      root->directs.emplace(obj->id);
     } else if (auto bitcast = dyn_cast<BitCastInst>(inst)) {
       Node *reg = next.getRefNode(inst);
       Value *src = bitcast->getOperand(0);
@@ -168,6 +197,9 @@ struct Escape : public FunctionPass {
     }
   }
   bool runOnFunction(Function &F) override {
+    if (F.getName().substr(0, GO_LIB_PREFIX.size()) == GO_LIB_PREFIX) {
+      return false;
+    }
     for (auto bb = F.begin(), e = F.end(); bb != e; ++bb) {
       for (auto i = bb->begin(), e = bb->end(); i != e; ++i) {
         graphs.emplace(getId(&*i), ConnectionGraph());
