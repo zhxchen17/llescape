@@ -34,5 +34,5 @@ the "connection graph" proposed by Choi. The code can be found at my personal
 Github repository https://github.com/zhxchen17/llescape, the main work is placed
 under llvm/lib/Transforms/Escape. I have to say the work is kind of undergoing 
 so currently there's no well-formed output. My plan now is to finish the 
-intraprocedual analysis part before May, and I hope I can catch up with the 
-progress in several days.
+intraprocedual analysis part (the original plan) before Apr. 28th, and I hope 
+I can catch up with the progress in several days.
