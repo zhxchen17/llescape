@@ -2,8 +2,8 @@
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
-#include "llvm/IR/Value.h"
 #include "llvm/IR/Type.h"
+#include "llvm/IR/Value.h"
 #include "llvm/Pass.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/raw_ostream.h"
@@ -73,36 +73,36 @@ struct Node {
            cmp(fields, other.fields);
   }
   void print() {
-    if (!(isa<CallInst>(inst) ||
-          isa<StoreInst>(inst) ||
-          isa<AllocaInst>(inst)
-          )) {
+    if (!(isa<CallInst>(inst) || isa<StoreInst>(inst) ||
+          isa<AllocaInst>(inst))) {
       return;
     }
     errs() << id << ": ";
     if (isMem) {
       errs() << "fields ";
       for (auto &s : fields)
-        errs() << s << " ";
-      errs() << "\nchildren";
+        errs() << s << ", ";
+      errs() << "\nchildren ";
       for (auto &s : children)
-        errs() << s << " ";
+        errs() << s << ", ";
       errs() << "\n";
     } else {
       errs() << "directs ";
       for (auto &s : directs)
-        errs() << s << " ";
+        errs() << s << ", ";
       errs() << "\nindirects ";
       for (auto &s : indirects)
-        errs() << s << " ";
+        errs() << s << ", ";
       errs() << "\n";
     }
   }
-  static string getMemNodeName(const string &reg) { return "@" + reg; }
-  static Node makeMemNode(Instruction *inst) {
+  static string getMemNodeName(const string &reg, const string &suffix = ".0") {
+    return "@" + reg + suffix;
+  }
+  static Node makeMemNode(Instruction *inst, const string &suffix) {
     Node node;
     node.isMem = true;
-    node.id = getMemNodeName(getId(inst));
+    node.id = getMemNodeName(getId(inst), suffix);
     node.inst = inst;
     return node;
   }
@@ -117,6 +117,33 @@ struct Node {
 };
 struct ConnectionGraph {
   map<NodeId, Node> nodes;
+  Node *genMemNode(Type *type, Instruction *inst, string idx = ".0") {
+    if (auto structType = dyn_cast<StructType>(type)) {
+      Node tmp = Node::makeMemNode(inst, idx);
+      auto const &r = nodes.emplace(tmp.id, tmp);
+      Node &node = r.first->second;
+      int i = 0;
+      for (auto it = structType->element_begin(), e = structType->element_end();
+           it != e; ++it) {
+        Node *child = genMemNode(*it, inst, idx + "." + to_string(i));
+        if (isa<PointerType>(*it)) {
+          node.fields.insert(child->id);
+        } else {
+          node.children.insert(child->id);
+        }
+        i++;
+      }
+      return &node;
+    } else if (auto pointerType = dyn_cast<PointerType>(type)) {
+      return genMemNode(pointerType->getElementType(), inst, idx + ".0");
+    } else if (auto integerType = dyn_cast<IntegerType>(type)) {
+      Node tmp = Node::makeMemNode(inst, idx);
+      auto const &r = nodes.emplace(tmp.id, tmp);
+      return &r.first->second;
+    } else {
+      return nullptr;
+    }
+  }
   Node *getMemNode(Instruction *inst) {
     Type *allocType = nullptr;
     if (auto *call = dyn_cast<CallInst>(inst)) {
@@ -137,10 +164,12 @@ struct ConnectionGraph {
       allocType = alloca->getAllocatedType();
     }
     if (allocType) {
-      // TODO recursively generate MemNode
-      Node node = Node::makeMemNode(inst);
-      auto const &r = nodes.emplace(node.id, node);
-      return &r.first->second;
+      auto it = nodes.find(Node::getMemNodeName(getId(inst)));
+      if (it == nodes.end()) {
+        return genMemNode(allocType, inst);
+      } else {
+        return &it->second;
+      }
     }
     return nullptr;
   }
