@@ -1,4 +1,7 @@
-#include "llvm/Analysis/CaptureTracking.h"
+#include "Node.h"
+#include "llvm/IR/Operator.h"
+#include "llvm/Analysis/AliasAnalysis.h"
+#include "llvm/Analysis/MemorySSA.h"
 #include "llvm/IR/Function.h"
 #include "llvm/IR/Instruction.h"
 #include "llvm/IR/Instructions.h"
@@ -10,9 +13,16 @@
 #include <iostream>
 #include <map>
 #include <set>
-#include <sstream>
 #include <string>
 #include <vector>
+
+// #define LLESCAPE_DEBUG
+
+#ifdef LLESCAPE_DEBUG
+#define TRACE(x) x
+#else
+#define TRACE(x)
+#endif
 
 using std::cout;
 using std::endl;
@@ -20,101 +30,14 @@ using std::hex;
 using std::map;
 using std::set;
 using std::string;
-using std::stringstream;
 using std::to_string;
 using std::vector;
 using namespace llvm;
 
-namespace {
-using NodeId = string;
-using InstId = string;
 static const string GO_HEAP_CALL = "__go_new";
 static const string GO_LIB_PREFIX = "__go_";
-NodeId getId(Instruction *inst) {
-  uintptr_t id = reinterpret_cast<uintptr_t>(inst);
-  stringstream stream;
-  stream << hex << id;
-  return stream.str();
-}
-struct ConnectionGraph;
-struct Node {
-  bool isMem;
-  string id;
-  ConnectionGraph *graph;
-  Instruction *inst;
-  // For RefNode
-  set<NodeId> indirects;
-  set<NodeId> directs;
-  // For MemNode
-  set<NodeId> children;
-  set<NodeId> fields;
-  void setGraph(ConnectionGraph *g) { graph = g; }
-  bool operator==(const Node &other) const {
-    if (id != other.id) {
-      return false;
-    }
-    auto cmp = [&](const set<NodeId> &a, const set<NodeId> &b) {
-      if (a.size() != b.size()) {
-        return false;
-      }
-      int n = a.size();
-      auto ita = a.begin();
-      auto itb = b.begin();
-      for (int i = 0; i < n; i++) {
-        if (*ita != *itb) {
-          return false;
-        }
-        ita++;
-        itb++;
-      }
-      return true;
-    };
-    return cmp(indirects, other.indirects) && cmp(directs, other.directs) &&
-           cmp(fields, other.fields);
-  }
-  void print() {
-    if (!(isa<CallInst>(inst) || isa<StoreInst>(inst) ||
-          isa<AllocaInst>(inst))) {
-      return;
-    }
-    errs() << id << ": ";
-    if (isMem) {
-      errs() << "fields ";
-      for (auto &s : fields)
-        errs() << s << ", ";
-      errs() << "\nchildren ";
-      for (auto &s : children)
-        errs() << s << ", ";
-      errs() << "\n";
-    } else {
-      errs() << "directs ";
-      for (auto &s : directs)
-        errs() << s << ", ";
-      errs() << "\nindirects ";
-      for (auto &s : indirects)
-        errs() << s << ", ";
-      errs() << "\n";
-    }
-  }
-  static string getMemNodeName(const string &reg, const string &suffix = ".0") {
-    return "@" + reg + suffix;
-  }
-  static Node makeMemNode(Instruction *inst, const string &suffix) {
-    Node node;
-    node.isMem = true;
-    node.id = getMemNodeName(getId(inst), suffix);
-    node.inst = inst;
-    return node;
-  }
-  static string getRefNodeName(const string &reg) { return "&" + reg; }
-  static Node makeRefNode(Value *inst) {
-    Node node;
-    node.isMem = false;
-    node.id = inst->getName();
-    node.inst = dyn_cast<Instruction>(inst);
-    return node;
-  }
-};
+
+enum EscapeType { GlobalEscape = 0, LocalEscape = 1, NoEscape = 2 };
 struct ConnectionGraph {
   map<NodeId, Node> nodes;
   Node *genMemNode(Type *type, Instruction *inst, string idx = ".0") {
@@ -178,78 +101,211 @@ struct ConnectionGraph {
     auto const &r = nodes.emplace(node.id, node);
     return &r.first->second;
   }
-  void cloneTo(ConnectionGraph &ret) {
-    ret.nodes = nodes;
-    for (auto p : nodes) {
-      p.second.setGraph(&ret);
-    }
-  }
   void print() {
     for (auto p : nodes) {
       p.second.print();
     }
   }
 };
+
+namespace {
+
 struct Escape : public FunctionPass {
   static char ID;
   map<InstId, ConnectionGraph> graphs;
+
   Escape() : FunctionPass(ID) {}
-  void flowThrough(Instruction *inst, ConnectionGraph &next) {
-    if (auto call = dyn_cast<CallInst>(inst)) {
-      Node *obj = next.getMemNode(inst);
-      if (obj) {
-        errs() << "\t" << obj->id << "\n";
-        errs() << "\t"
-               << "captured: "
-               << llvm::PointerMayBeCaptured(obj->inst, true, true) << "\n";
-        Node *root = next.getRefNode(inst);
-        root->directs.emplace(obj->id);
+
+  EscapeType foundGlobal(Value *val) {
+    EscapeType ret = NoEscape;
+    if (auto bitcast = dyn_cast<BitCastInst>(val)) {
+      ret = foundGlobal(bitcast->getOperand(0));
+    } else if (auto gep = dyn_cast<GetElementPtrInst>(val)) {
+      ret = foundGlobal(gep->getOperand(0));
+    } else if (auto phi = dyn_cast<PHINode>(val)) {
+      int n = phi->getNumIncomingValues();
+      for (int i = 0; i < n; i++) {
+        Value *iv = phi->getIncomingValue(i);
+        EscapeType escaping = foundGlobal(iv);
+        if (escaping != NoEscape) {
+          ret = escaping;
+          break;
+        }
       }
-    } else if (auto alloca = dyn_cast<AllocaInst>(inst)) {
-      Node *obj = next.getMemNode(inst);
-      Node *root = next.getRefNode(inst);
-      root->directs.emplace(obj->id);
-    } else if (auto bitcast = dyn_cast<BitCastInst>(inst)) {
-      Node *reg = next.getRefNode(inst);
-      Value *src = bitcast->getOperand(0);
-      reg->indirects.emplace(next.getRefNode(src)->id);
+    } else if (auto bitop = dyn_cast<BitCastOperator>(val)) {
+      ret = foundGlobal(bitop->getOperand(0));
+    } else if (auto gepop = dyn_cast<GEPOperator>(val)) {
+      ret = foundGlobal(gepop->getOperand(0));
+    } else if (auto global = dyn_cast<GlobalVariable>(val)) {
+      ret = GlobalEscape;
+    }
+    return ret;
+  }
+
+  // Should always begin with store instruction.
+  EscapeType backward(MemoryAccess *ma) {
+    if (auto ud = dyn_cast<MemoryUseOrDef>(ma)) {
+      Value *val = ud->getMemoryInst();
+      if (auto call = dyn_cast<CallInst>(val)) {
+        return track(call, true);
+      } else {
+        if (auto store = dyn_cast<StoreInst>(val)) {
+          if (foundGlobal(store->getPointerOperand()) == GlobalEscape) {
+            return GlobalEscape;
+          }
+        }
+        return backward(ud->getDefiningAccess());
+      }
+    } else if (auto phi = dyn_cast<MemoryPhi>(ma)) {
+      // MemoryPhi
+      uint32_t n = phi->getNumIncomingValues();
+      for (uint32_t i = 0; i < n; i++) {
+        EscapeType escaping = backward(phi->getIncomingValue(i));
+        if (escaping != NoEscape)
+          return escaping;
+      }
+      return NoEscape;
+    } else {
+      return GlobalEscape;
     }
   }
-  void propagate(Instruction *inst, ConnectionGraph &graph) {
-    Instruction *next = nullptr;
-    switch (inst->getOpcode()) {
-    default:
-      next = inst->getNextNode();
-      if (next) {
-        graph.cloneTo(graphs[getId(next)]);
+
+  EscapeType forward(MemoryAccess *m, Value *loc) {
+    EscapeType escaping = NoEscape;
+    for (auto user : m->users()) {
+      if (auto mu = dyn_cast<MemoryUse>(user)) {
+        Value *val = mu->getMemoryInst();
+        if (val && isa<LoadInst>(val)) {
+          auto ptr = dyn_cast<LoadInst>(val)->getPointerOperand();
+          TRACE(val->print(errs()));
+          TRACE(errs() << "\n");
+          auto &aa = getAnalysis<AAResultsWrapperPass>().getAAResults();
+          Module *mdl = m->getBlock()->getParent()->getParent();
+          DataLayout td(mdl);
+          PointerType *ptrTy = dyn_cast<PointerType>(ptr->getType());
+          PointerType *locTy = dyn_cast<PointerType>(loc->getType());
+          auto ar = aa.alias(ptr, td.getTypeAllocSize(ptrTy->getElementType()),
+                             loc, td.getTypeAllocSize(locTy->getElementType()));
+          if (ar != NoAlias) {
+            TRACE(errs() << "load not no alias.\n");
+            escaping = track(val);
+          } else {
+            TRACE(errs() << "load no alias.\n");
+          }
+          TRACE(errs() << "ptr: ");
+          TRACE(ptr->print(errs()));
+          TRACE(errs() << " loc: ");
+          TRACE(loc->print(errs()));
+          TRACE(errs() << "\n");
+        } else {
+          TRACE(errs() << "ERROR! UNKNOWN MEMORYUSE INST.\n");
+          escaping = GlobalEscape;
+        }
+      } else if (auto phi = dyn_cast<MemoryPhi>(user)) {
+        TRACE(errs() << "phi!\n");
+        escaping = forward(phi, loc);
+      } else if (auto def = dyn_cast<MemoryDef>(user)) {
+        Value *val = def->getMemoryInst();
+        if (val && isa<StoreInst>(val)) {
+          Value *ptr = dyn_cast<StoreInst>(val)->getPointerOperand();
+          TRACE(errs() << "def!\n");
+          TRACE(val->print(errs()));
+          TRACE(errs() << "\n");
+          auto &aa = getAnalysis<AAResultsWrapperPass>().getAAResults();
+          auto ar = aa.alias(ptr, loc);
+          if (ar != MustAlias) {
+            escaping = forward(def, loc);
+          }
+        } else {
+          TRACE(errs() << "ERROR! UNKNOWN MEMORYDEF INST.\n");
+          escaping = GlobalEscape;
+        }
+      }
+      if (escaping != NoEscape)
+        break;
+    }
+    return escaping;
+  }
+
+  set<InstId> trackList;
+  EscapeType track(Value *inst, bool isRoot = false) {
+    EscapeType escaping = NoEscape;
+    if (isRoot) {
+      const auto &r = trackList.emplace(getId(inst));
+      // already exists
+      if (!r.second) {
+        TRACE(errs() << "LOOP BACK\n");
+        return NoEscape;
       }
     }
+    for (auto user : inst->users()) {
+      if (auto bitcast = dyn_cast<BitCastInst>(user)) {
+        TRACE(errs() << "bitcast " << bitcast->getName() << "\n");
+        escaping = track(bitcast);
+      } else if (auto gep = dyn_cast<GetElementPtrInst>(user)) {
+        TRACE(errs() << "gep " << gep->getName() << "\n");
+        escaping = track(gep);
+      } else if (auto phi = dyn_cast<PHINode>(inst)) {
+        escaping = track(phi);
+      } else if (auto store = dyn_cast<StoreInst>(user)) {
+        TRACE(store->print(errs()));
+        TRACE(errs() << "\n");
+        if (getId(store->getValueOperand()) == getId(inst)) {
+          MemorySSA &mssa = getAnalysis<MemorySSAWrapperPass>().getMSSA();
+          MemoryUseOrDef *m = mssa.getMemoryAccess(store);
+          escaping = backward(m);
+          if (escaping == NoEscape) {
+            TRACE(errs() << "USERS:\n");
+            escaping = forward(m, store->getPointerOperand());
+          }
+        }
+      } else if (auto load = dyn_cast<LoadInst>(user)) {
+        TRACE(errs() << "load " << load->getName() << "\n");
+        return NoEscape;
+      } else {
+        escaping = LocalEscape;
+      }
+      if (escaping != NoEscape)
+        break;
+    }
+    if (isRoot) {
+      trackList.erase(getId(inst));
+    }
+    return escaping;
   }
+
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequiredTransitive<AAResultsWrapperPass>();
+    AU.addRequiredTransitive<MemorySSAWrapperPass>();
+    AU.setPreservesAll();
+  }
+
   bool runOnFunction(Function &F) override {
     if (F.getName().substr(0, GO_LIB_PREFIX.size()) == GO_LIB_PREFIX) {
       return false;
     }
-    for (auto bb = F.begin(), e = F.end(); bb != e; ++bb) {
-      for (auto i = bb->begin(), e = bb->end(); i != e; ++i) {
-        graphs.emplace(getId(&*i), ConnectionGraph());
-      }
-    }
+
+    ConnectionGraph graph;
     errs() << "Escape: ";
     errs().write_escaped(F.getName()) << '\n';
     for (auto bb = F.begin(), e = F.end(); bb != e; ++bb) {
       for (auto i = bb->begin(), e = bb->end(); i != e; ++i) {
-        ConnectionGraph next;
         InstId id = getId(&*i);
-        graphs[id].cloneTo(next);
-        errs() << "Instruction: ";
-        i->print(errs());
-        errs() << "\n";
-        errs() << "Current graph:\n";
-        next.print();
-        flowThrough(&*i, next);
-        errs() << "Next graph:\n";
-        next.print();
-        propagate(&*i, next);
+        Instruction *inst = &*i;
+        Node *obj = graph.getMemNode(inst);
+        if (obj && isa<CallInst>(inst)) {
+          trackList.clear();
+          i->print(errs());
+          errs() << "\n";
+          EscapeType res = track(inst, true);
+          if (res == NoEscape) {
+            errs() << "is local.\n";
+          } else if (res == LocalEscape) {
+            errs() << "locally escapes.\n";
+          } else {
+            errs() << "globally escapes.\n";
+          }
+        }
       }
     }
     return false;
@@ -259,3 +315,46 @@ struct Escape : public FunctionPass {
 
 char Escape::ID = 0;
 static RegisterPass<Escape> X("escape", "Escape pass", false, false);
+
+namespace {
+struct Try : public FunctionPass {
+  static char ID;
+
+  Try() : FunctionPass(ID) {}
+  void getAnalysisUsage(AnalysisUsage &AU) const override {
+    AU.addRequiredTransitive<AAResultsWrapperPass>();
+    AU.setPreservesAll();
+  }
+
+  bool runOnFunction(Function &F) override {
+    if (F.getName() != "main.fooo") {
+      return false;
+    }
+    errs() << "Escape: ";
+    errs().write_escaped(F.getName()) << '\n';
+    auto &aa = getAnalysis<AAResultsWrapperPass>().getAAResults();
+    for (auto bb = F.begin(), e = F.end(); bb != e; ++bb) {
+      for (auto i = bb->begin(), e = bb->end(); i != e; ++i) {
+        for (auto j = bb->begin(), ej = bb->end(); j != ej; ++j) {
+          errs() << i->getName() << " " << j->getName() << ": ";
+          auto ar = aa.alias(&*i, 8, &*j, 8);
+          if (ar == NoAlias) {
+            errs() << "NoAlias";
+          } else if (ar == MayAlias) {
+            errs() << "MayAlias";
+          } else if (ar == PartialAlias) {
+            errs() << "PartialAlias";
+          } else if (ar == MustAlias) {
+            errs() << "MustAlias";
+          }
+          errs() << "\n";
+        }
+      }
+    }
+    return false;
+  }
+};
+}
+
+char Try::ID = 1;
+static RegisterPass<Try> XX("try", "Try pass", false, false);
