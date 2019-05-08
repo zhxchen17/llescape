@@ -3,12 +3,9 @@
 #include "llvm/IR/Value.h"
 #include <string>
 #include <set>
-#include <sstream>
 
 using std::string;
 using std::set;
-using std::stringstream;
-using std::hex;
 using namespace llvm;
 
 struct ConnectionGraph;
@@ -16,16 +13,6 @@ struct ConnectionGraph;
 using NodeId = string;
 using InstId = string;
 
-InstId getId(Value *val) {
-  uintptr_t id = reinterpret_cast<uintptr_t>(val) & 0xffff;
-  stringstream stream;
-  stream << hex << id;
-  if (auto inst = dyn_cast<Instruction>(val)) {
-    return inst->getName().str() + "_" + stream.str();
-  } else {
-    return "_" + stream.str();
-  }
-}
 
 struct Node {
   bool isMem;
