@@ -1,14 +1,6 @@
 package main;
 
-type Point struct {
-	X int
-	Y int
-}
-
-type Pair struct {
-	P *Point
-	Z int
-}
+var N int = 10
 func foo() int {
 	a := &Point{1, 2}
 	b := Pair{a, 0}
@@ -45,6 +37,16 @@ func fooIfEscape() *Point {
 	return p.P
 }
 
+type Point struct {
+	X int
+	Y int
+}
+
+type Pair struct {
+	P *Point
+	Z int
+}
+
 func fooIf() int {
 	a := true
 	var p Pair
@@ -67,7 +69,7 @@ func fooGlobal() {
 	a := &Point{1, 2}
 	i := 0
 	var p *Pair2
-	for i < 1 {
+	for i < N {
 		p = &global
 		i += 1
 	}

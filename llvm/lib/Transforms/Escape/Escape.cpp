@@ -19,7 +19,7 @@
 #include <string>
 #include <vector>
 
-#define LLESCAPE_DEBUG
+// #define LLESCAPE_DEBUG
 
 #ifdef LLESCAPE_DEBUG
 #define TRACE(x) x
@@ -349,15 +349,19 @@ struct EscapeAnalysis {
           Function *func = call->getCalledFunction();
           if (func && func->getName() == GO_HEAP_CALL) {
             trackList.clear();
-            i->print(errs());
-            errs() << "\n";
+            string var;
+            for (auto user : i->users()) {
+              var = user->getName();
+              break;
+            }
             EscapeType res = track(inst, true);
+            errs() << "%" << i->getName() << "(" << var << ")";
             if (res == NoEscape) {
-              errs() << "is local.\n";
+              errs() << " is local.\n";
             } else if (res == LocalEscape) {
-              errs() << "locally escapes.\n";
+              errs() << " locally escapes.\n";
             } else {
-              errs() << "globally escapes.\n";
+              errs() << " globally escapes.\n";
             }
           }
         }
