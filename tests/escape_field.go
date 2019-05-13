@@ -6,7 +6,7 @@
 
 // Test escape analysis with respect to field assignments.
 
-package escape
+package main
 
 var sink interface{}
 
@@ -101,74 +101,14 @@ func field9() {
 	sink = y1.x // ERROR "y1\.x escapes to heap"
 }
 
-func field10() {
-	i := 0 // ERROR "moved to heap: i$"
-	var y Y
-	// BAD: &i should not escape
-	y.x.p1 = &i
-	x := y.x
-	var y1 Y
-	y1.x = x
-	sink = y1.x.p2 // ERROR "y1\.x\.p2 escapes to heap"
-}
-
-func field11() {
-	i := 0         // ERROR "moved to heap: i$"
-	x := X{p1: &i}
-	sink = x.p1    // ERROR "x\.p1 escapes to heap"
-}
-
-func field12() {
-	i := 0 // ERROR "moved to heap: i$"
-	// BAD: &i should not escape
-	x := X{p1: &i}
-	sink = x.p2    // ERROR "x\.p2 escapes to heap"
-}
-
-func field13() {
-	i := 0          // ERROR "moved to heap: i$"
-	x := &X{p1: &i} // ERROR "field13 &X literal does not escape$"
-	sink = x.p1     // ERROR "x\.p1 escapes to heap"
-}
-
-func field14() {
-	i := 0 // ERROR "moved to heap: i$"
-	// BAD: &i should not escape
-	x := &X{p1: &i} // ERROR "field14 &X literal does not escape$"
-	sink = x.p2     // ERROR "x\.p2 escapes to heap"
-}
-
-func field15() {
-	i := 0          // ERROR "moved to heap: i$"
-	x := &X{p1: &i} // ERROR "&X literal escapes to heap$"
-	sink = x        // ERROR "x escapes to heap"
-}
-
-func field16() {
-	i := 0 // ERROR "moved to heap: i$"
-	var x X
-	// BAD: &i should not escape
-	x.p1 = &i
-	var iface interface{} = x // ERROR "field16 x does not escape"
-	x1 := iface.(X)
-	sink = x1.p2 // ERROR "x1\.p2 escapes to heap"
-}
-
-func field17() {
-	i := 0 // ERROR "moved to heap: i$"
-	var x X
-	x.p1 = &i
-	var iface interface{} = x // ERROR "field17 x does not escape"
-	x1 := iface.(X)
-	sink = x1.p1 // ERROR "x1\.p1 escapes to heap"
-}
-
-func field18() {
-	i := 0 // ERROR "moved to heap: i$"
-	var x X
-	// BAD: &i should not escape
-	x.p1 = &i
-	var iface interface{} = x // ERROR "field18 x does not escape"
-	y, _ := iface.(Y)         // Put X, but extracted Y. The cast will fail, so y is zero initialized.
-	sink = y                  // ERROR "y escapes to heap"
+func main() {
+	field0()
+	field1()
+	field3()
+	field4()
+	field5()
+	field6a()
+	field7()
+	field8()
+	field9()
 }

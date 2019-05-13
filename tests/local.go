@@ -76,6 +76,11 @@ func fooGlobal() {
 	p.P = a
 }
 
+func fooLocal() int {
+	a := &Point{1, 2}
+	return a.X
+}
+
 func main() {
 	a := foo()
 	println(a)
@@ -88,4 +93,5 @@ func main() {
 	e := fooIf()
 	println(e)
 	fooGlobal()
+	println(fooLocal())
 }

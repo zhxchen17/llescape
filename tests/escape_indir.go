@@ -6,7 +6,7 @@
 
 // Test escape analysis when assigning to indirections.
 
-package escape
+package main
 
 var sink interface{}
 
@@ -77,21 +77,6 @@ func constptr5() *ConstPtr {
 	return p
 }
 
-// BAD: p should not escape here
-func constptr6(p *ConstPtr) { // ERROR "leaking param content: p"
-	p1 := &ConstPtr{} // ERROR "&ConstPtr literal does not escape"
-	*p1 = *p
-	_ = p1
-}
-
-func constptr7() **ConstPtr {
-	p := new(ConstPtr) // ERROR "new\(ConstPtr\) escapes to heap" "moved to heap: p"
-	var tmp ConstPtr2
-	p1 := &tmp
-	p.c = *p1
-	return &p
-}
-
 func constptr8() *ConstPtr {
 	p := new(ConstPtr) // ERROR "new\(ConstPtr\) escapes to heap"
 	var tmp ConstPtr2
@@ -108,53 +93,14 @@ func constptr9() ConstPtr {
 	return *p
 }
 
-func constptr10() ConstPtr {
-	x := &ConstPtr{} // ERROR "moved to heap: x" "&ConstPtr literal escapes to heap"
-	i := 0           // ERROR "moved to heap: i"
-	var p *ConstPtr
-	p = &ConstPtr{p: &i, x: &x} // ERROR "&ConstPtr literal does not escape"
-	var pp **ConstPtr
-	pp = &p
-	return **pp
-}
-
-func constptr11() *ConstPtr {
-	i := 0             // ERROR "moved to heap: i"
-	p := new(ConstPtr) // ERROR "new\(ConstPtr\) escapes to heap"
-	p1 := &ConstPtr{}  // ERROR "&ConstPtr literal does not escape"
-	p1.p = &i
-	*p = *p1
-	return p
-}
-
-func foo(p **int) { // ERROR "foo p does not escape"
-	i := 0 // ERROR "moved to heap: i"
-	y := p
-	*y = &i
-}
-
-func foo1(p *int) { // ERROR "p does not escape"
-	i := 0  // ERROR "moved to heap: i"
-	y := &p
-	*y = &i
-}
-
-func foo2() {
-	type Z struct {
-		f **int
-	}
-	x := new(int) // ERROR "moved to heap: x" "new\(int\) escapes to heap"
-	sink = &x     // ERROR "&x escapes to heap"
-	var z Z
-	z.f = &x
-	p := z.f
-	i := 0  // ERROR "moved to heap: i"
-	*p = &i
-}
-
-var global *byte
-
-func f() {
-	var x byte    // ERROR "moved to heap: x"
-	global = &*&x
+func main() {
+	constptr0()
+	constptr01()
+	constptr02()
+	constptr1()
+	constptr2()
+	constptr4()
+	constptr5()
+	constptr8()
+	constptr9()
 }

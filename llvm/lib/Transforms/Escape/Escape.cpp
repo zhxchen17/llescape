@@ -318,6 +318,11 @@ struct EscapeAnalysis {
       } else if (auto iv = dyn_cast<InsertValueInst>(user)) {
         TRACE(errs() << "insertvalue " << iv->getName() << "\n");
         escaping = track(iv);
+      } else if (auto ev = dyn_cast<ExtractValueInst>(user)) {
+        TRACE(errs() << "extractvalue " << ev->getName() << "\n");
+        escaping = track(ev);
+      } else if (auto op = dyn_cast<ICmpInst>(user)) {
+        escaping = NoEscape;
       } else if (auto call = dyn_cast<CallInst>(user)) {
         TRACE(call->print(errs()));
         escaping = resultFor(call, inst);
