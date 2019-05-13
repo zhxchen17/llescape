@@ -23,7 +23,7 @@ The source code for escape analysis is placed under the directory `llvm/lib/Tran
 
 Test files are under the directory `./tests`.
 
-### Intraprocedual Analysis
+### Intraprocedural Analysis
 
 Run `./analyze.sh [test file name (without extension name)]` should execute the intraprocedual analysis. For exmaple:
 
@@ -31,7 +31,7 @@ Run `./analyze.sh [test file name (without extension name)]` should execute the 
 $ ./analyze.sh local
 ```
 
-### Interprocedual Analysis
+### Interprocedural Analysis
 
 Run `./analyze.sh [test file name (without extension name)] -module` should execute the interprocedual analysis. For example:
 
